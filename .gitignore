@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv*/
+*.egg-info/
+
+# Backups
+*.backup
+*.bak
+
+# Extracted Windows files (not for distribution)
+WALRUS_*/
+CSM_*/
+*.exe
+*.dll
+WALRUS_payload_dec.bin
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

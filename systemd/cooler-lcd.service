@@ -1,0 +1,15 @@
+[Unit]
+Description=Walrus Assassin 90 LCD Display Driver
+After=graphical-session.target
+After=systemd-udevd.service
+
+[Service]
+Type=simple
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=__VENV_PYTHON__ __INSTALL_DIR__/walrus_lcd.py
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

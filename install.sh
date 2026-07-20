@@ -13,9 +13,13 @@ set -euo pipefail
 # ---- Constants -----------------------------------------------------------
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_DRIVER="${REPO_DIR}/src/walrus_lcd.py"
+SRC_CONFIG_TOOL="${REPO_DIR}/src/config_walrus.py"
+SRC_CONFIG_EXAMPLE="${REPO_DIR}/src/config.example.toml"
 UDEV_RULE="${REPO_DIR}/udev/99-cooler-lcd.rules"
 SERVICE_TEMPLATE="${REPO_DIR}/systemd/cooler-lcd.service"
 INSTALL_DIR="${HOME}/.local/share/walrus-lcd"
+BIN_DIR="${HOME}/.local/bin"
+CONFIG_PATH="${INSTALL_DIR}/config.toml"
 SERVICE_DIR="${HOME}/.config/systemd/user"
 SERVICE_NAME="cooler-lcd.service"
 
@@ -34,6 +38,8 @@ fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
 
 # ---- Guard Clauses -------------------------------------------------------
 [[ -f "${SRC_DRIVER}" ]]    || fail "Driver not found: ${SRC_DRIVER}"
+[[ -f "${SRC_CONFIG_TOOL}" ]] || fail "Config tool not found: ${SRC_CONFIG_TOOL}"
+[[ -f "${SRC_CONFIG_EXAMPLE}" ]] || fail "Config example not found: ${SRC_CONFIG_EXAMPLE}"
 [[ -f "${UDEV_RULE}" ]]     || fail "Udev rule not found: ${UDEV_RULE}"
 [[ -f "${SERVICE_TEMPLATE}" ]] || fail "Service template not found: ${SERVICE_TEMPLATE}"
 
@@ -72,6 +78,25 @@ install_driver() {
     cp "${SRC_DRIVER}" "${INSTALL_DIR}/walrus_lcd.py"
     chmod +x "${INSTALL_DIR}/walrus_lcd.py"
     ok "Driver installed: ${INSTALL_DIR}/walrus_lcd.py"
+}
+
+# ---- Step 2b: Install Config Tool & Symlink ------------------------------
+install_config_tool() {
+    info "Installing config tool to ${INSTALL_DIR}..."
+    cp "${SRC_CONFIG_TOOL}" "${INSTALL_DIR}/config_walrus.py"
+    chmod +x "${INSTALL_DIR}/config_walrus.py"
+    cp "${SRC_CONFIG_EXAMPLE}" "${INSTALL_DIR}/config.example.toml"
+
+    mkdir -p "${BIN_DIR}"
+    ln -sf "${INSTALL_DIR}/config_walrus.py" "${BIN_DIR}/walrus-config"
+
+    if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
+        warn "~/.local/bin is not in your PATH"
+        warn "Add this to your ~/.bashrc:"
+        warn "  export PATH=\"${HOME}/.local/bin:\${PATH}\""
+    else
+        ok "Config tool installed: ${BIN_DIR}/walrus-config"
+    fi
 }
 
 # ---- Step 3: Create Virtual Environment & Install Python Deps ------------
@@ -128,6 +153,21 @@ install_systemd_service() {
     ok "Service installed and started"
 }
 
+# ---- Step 5b: Interactive Configuration ----------------------------------
+interactive_config() {
+    echo ""
+    info "You can now configure the driver interactively."
+    info "Settings: temperature source (CPU/GPU/auto), refresh interval, clamp max."
+    echo ""
+    read -r -p "Configure now? [Y/n] " reply < /dev/tty
+    if [[ "${reply}" =~ ^[Nn]([Oo][Ee])?$ ]]; then
+        info "Skipping. Configure later with: ${CYAN}walrus-config${NC}"
+        return
+    fi
+    python3 "${INSTALL_DIR}/config_walrus.py" < /dev/tty || \
+        warn "Config tool exited with error — you can retry later with: walrus-config"
+}
+
 # ---- Step 6: Enable Lingering (optional, for headless sessions) ----------
 enable_lingering() {
     if command -v loginctl &>/dev/null; then
@@ -147,9 +187,11 @@ main() {
 
     detect_and_install_deps
     install_driver
+    install_config_tool
     setup_venv
     install_udev_rule
     install_systemd_service
+    interactive_config
     enable_lingering
 
     echo ""
@@ -160,6 +202,9 @@ main() {
     echo -e "  Driver:     ${CYAN}${INSTALL_DIR}/walrus_lcd.py${NC}"
     echo -e "  Venv:       ${CYAN}${INSTALL_DIR}/venv${NC}"
     echo -e "  Service:    ${CYAN}${SERVICE_NAME}${NC}"
+    echo -e "  Config tool: ${CYAN}${BIN_DIR}/walrus-config${NC}"
+    echo ""
+    echo -e "  ${BOLD}Configure anytime:${NC} ${CYAN}walrus-config${NC}"
     echo ""
     echo -e "  ${BOLD}Quick commands:${NC}"
     echo -e "    Check status:  ${CYAN}make status${NC}"

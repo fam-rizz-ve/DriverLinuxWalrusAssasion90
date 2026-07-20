@@ -26,6 +26,7 @@ import glob
 import os
 import signal
 import warnings
+from pathlib import Path
 
 import psutil
 
@@ -37,17 +38,149 @@ try:
 except Exception:
     _HAS_PYNVML = False
 
+# ---- TOML support (stdlib 3.11+, manual fallback) ------------------------
+try:
+    import tomllib
+except ImportError:
+    tomllib = None  # type: ignore[assignment]
+
+
+def _parse_toml_text(text: str) -> dict:
+    """Minimal TOML parser for flat key=value files (fallback when tomllib absent).
+
+    Handles only: key = "string", key = integer, key = float, and comments.
+    Sufficient for the walrus-lcd config format.
+    """
+    result: dict = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, _, val = stripped.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"')
+        # Try int
+        try:
+            result[key] = int(val)
+            continue
+        except ValueError:
+            pass
+        # Try float
+        try:
+            result[key] = float(val)
+            continue
+        except ValueError:
+            pass
+        # String (already stripped of quotes)
+        result[key] = val
+    return result
+
+
+def load_config() -> dict:
+    """Load configuration from a TOML file with sane fallback defaults.
+
+    Search order (first match wins):
+      1. ${WALRUS_LCD_CONFIG} env var
+      2. ~/.local/share/walrus-lcd/config.toml
+      3. <script_dir>/config.toml
+      4. None found → built-in defaults (no error)
+
+    Returns a validated dict with keys:
+      temp_source, switch_seconds, refresh_ms, clamp_max
+
+    Raises ValueError on invalid config values or malformed TOML.
+    """
+    defaults = {
+        "temp_source": "auto",
+        "switch_seconds": 6,
+        "refresh_ms": 200,
+        "clamp_max": 89,
+    }
+
+    config_path: str | None = None
+    candidates = []
+    env_override = os.environ.get("WALRUS_LCD_CONFIG", "").strip()
+    if env_override:
+        candidates.append(Path(env_override))
+    candidates.append(Path.home() / ".local/share/walrus-lcd/config.toml")
+    candidates.append(Path(__file__).resolve().parent / "config.toml")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            config_path = str(candidate)
+            break
+
+    if config_path is None:
+        return defaults
+
+    # --- Parse TOML at the boundary ---------------------------------------
+    try:
+        if tomllib is not None:
+            with open(config_path, "rb") as f:
+                raw = tomllib.load(f)
+        else:
+            with open(config_path, "r") as f:
+                raw = _parse_toml_text(f.read())
+    except Exception as exc:
+        raise SystemExit(f"[!] Failed to parse config file {config_path}: {exc}") from exc
+
+    # Merge: raw values override defaults
+    cfg = {**defaults, **{k: v for k, v in raw.items() if k in defaults}}
+
+    # --- Validate at boundary (Parse Don't Validate) ----------------------
+    # temp_source
+    if cfg["temp_source"] not in ("cpu", "gpu", "auto"):
+        raise SystemExit(
+            f"[!] Invalid temp_source={cfg['temp_source']!r} in {config_path}. "
+            f"Must be one of: cpu, gpu, auto"
+        )
+    # switch_seconds
+    if not isinstance(cfg["switch_seconds"], int) or cfg["switch_seconds"] < 1:
+        raise SystemExit(
+            f"[!] Invalid switch_seconds={cfg['switch_seconds']!r} in {config_path}. "
+            f"Must be an integer >= 1"
+        )
+    # refresh_ms
+    if not isinstance(cfg["refresh_ms"], int) or cfg["refresh_ms"] < 50:
+        raise SystemExit(
+            f"[!] Invalid refresh_ms={cfg['refresh_ms']!r} in {config_path}. "
+            f"Must be an integer >= 50"
+        )
+    # clamp_max
+    if not isinstance(cfg["clamp_max"], int) or cfg["clamp_max"] < 1 or cfg["clamp_max"] > 100:
+        raise SystemExit(
+            f"[!] Invalid clamp_max={cfg['clamp_max']!r} in {config_path}. "
+            f"Must be an integer in range [1, 100]"
+        )
+
+    return cfg
+
+
+# ---- Load config and derive constants ------------------------------------
+_cfg = load_config()
+_config_source = "built-in defaults"
+for _candidate in [
+    os.environ.get("WALRUS_LCD_CONFIG", "").strip(),
+    str(Path.home() / ".local/share/walrus-lcd/config.toml"),
+    str(Path(__file__).resolve().parent / "config.toml"),
+]:
+    if _candidate and os.path.isfile(_candidate):
+        _config_source = _candidate
+        break
+
 VID = 0x5131
 PID = 0x2007
 FRAME_SIZE = 64
-REFRESH_S = 0.2           # 200 ms update interval
+REFRESH_S = _cfg["refresh_ms"] / 1000.0
 
 # ---- Temperature display mode ------------------------------------------------
 # "auto" = alternate between CPU and GPU temp every TEMP_SWITCH_S seconds
-TEMP_MODE = "auto"
-TEMP_SWITCH_S = 6           # seconds between CPU<->GPU toggles
-TEMP_MIN = 0                # display lower bound
-TEMP_MAX = 89               # display upper bound (90+ = alarm, 120+ = "h1")
+TEMP_MODE = _cfg["temp_source"]
+TEMP_SWITCH_S = _cfg["switch_seconds"]
+TEMP_MIN = 0                # firmware floor, not configurable
+TEMP_MAX = _cfg["clamp_max"]
 _TEMP_MODE_CYCLE = 0        # 0 = CPU, 1 = GPU in main field
 _last_good_cpu_temp = 50.0  # cache for last valid CPU temp
 _last_good_gpu_temp = 40.0  # cache for last valid GPU temp
@@ -209,12 +342,18 @@ def main() -> None:
 
     # ---- Startup banner --------------------------------------------------
     print("Walrus Assassin 90 display driver")
+    print(f"Config: {_config_source}")
     dev = open_device()
     if not dev:
         sys.exit(1)
     print(f"Device: {dev.path}")
-    print(f"Mode: CPU<->GPU alternation every {TEMP_SWITCH_S}s")
-    print(f"Temp range: {TEMP_MIN}-{TEMP_MAX}°C (clamped)")
+    if TEMP_MODE == "cpu":
+        print("Mode: CPU only")
+    elif TEMP_MODE == "gpu":
+        print("Mode: GPU only")
+    else:
+        print(f"Mode: CPU<->GPU alternation every {TEMP_SWITCH_S}s")
+    print(f"Refresh: {REFRESH_S*1000:.0f}ms  |  Temp range: {TEMP_MIN}-{TEMP_MAX}°C (clamped)")
     print("Streaming sensors (Ctrl-C to stop).")
 
     sensors = Sensors()

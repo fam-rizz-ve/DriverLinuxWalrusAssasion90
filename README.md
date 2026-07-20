@@ -44,6 +44,15 @@ make install
 
 That's it. The display will show your CPU temperature within seconds.
 
+### Common Commands
+
+| Command | Description |
+|---------|-------------|
+| `walrus-config` or `make config` | 🐋 Interactive configuration tool |
+| `make status` | Show service status |
+| `make logs` | Follow service logs |
+| `make restart` | Restart the service |
+
 ---
 
 ## 🔧 Manual Installation
@@ -90,27 +99,111 @@ python3 src/walrus_lcd.py --print
 
 ---
 
-## ⚙️ Configuration
+## 🔧 Configuration
 
-The driver reads two environment variables:
+The driver is **fully configurable** — no need to edit Python code.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TEMP_MODE` | `"auto"` | `"auto"` = alternate CPU/GPU. Only mode currently supported. |
-| `TEMP_SWITCH_S` | `6` | Seconds between CPU ↔ GPU alternation |
-
-To customize, edit `~/.config/systemd/user/cooler-lcd.service` and add:
-
-```ini
-Environment=TEMP_SWITCH_S=10
-```
-
-Then restart:
+### Interactive configuration
 
 ```bash
-systemctl --user daemon-reload
+walrus-config
+```
+
+—or if installed from source:
+
+```bash
+make config
+```
+
+You'll be prompted for each setting (press **Enter** to keep current value):
+
+```
+🐋 Walrus LCD Configuration
+
+Current configuration:
+  temp_source     = auto    (CPU<->GPU alternating)
+  switch_seconds = 6
+  refresh_ms     = 200
+  clamp_max      = 89
+
+Edit values (press Enter to keep current):
+
+  Temperature source [auto] (cpu|gpu|auto): cpu
+  Switch seconds [6]:
+  Refresh ms [200] (min 50):
+  Clamp max [89] (1-100): 85
+
+Save? [Y/n] y
+
+✅ Saved to /home/andrea/.local/share/walrus-lcd/config.toml
+🔄 Service restarted.
+```
+
+### Non-interactive flags
+
+| Flag | Description |
+| ---- | ----------- |
+| `--show` | Print current configuration and exit |
+| `--reset` | Reset to defaults (with confirmation prompt) |
+| `--help` | Print usage |
+
+### Manual configuration
+
+The config file is plain TOML at `~/.local/share/walrus-lcd/config.toml`. Edit it directly if you prefer:
+
+```toml
+# Walrus Assassin 90 LCD driver configuration
+
+# Temperature source to display
+#   "cpu"  — show CPU temperature only
+#   "gpu"  — show GPU temperature only (requires NVIDIA + pynvml)
+#   "auto" — alternate between CPU and GPU every switch_seconds
+temp_source = "auto"
+
+# Seconds between CPU↔GPU alternation (only used when temp_source = "auto")
+switch_seconds = 6
+
+# HID refresh interval in milliseconds (50ms minimum to avoid bus spam)
+refresh_ms = 200
+
+# Maximum temperature to send to display
+# Display valid range is 0-89; 90+ blinks (alarm), 120+ shows "h1"
+# Lower this if you want to cap the displayed temperature
+clamp_max = 89
+```
+
+After manual edit, restart the service:
+
+```bash
+make restart
+# or
 systemctl --user restart cooler-lcd.service
 ```
+
+### Config keys reference
+
+| Key | Type | Default | Valid | Description |
+| --- | ---- | ------- | ----- | ----------- |
+| `temp_source` | string | `"auto"` | `cpu` / `gpu` / `auto` | Which temperature to display |
+| `switch_seconds` | integer | `6` | `>= 1` | Seconds between CPU↔GPU alternation (when `temp_source="auto"`) |
+| `refresh_ms` | integer | `200` | `>= 50` | HID refresh interval in milliseconds |
+| `clamp_max` | integer | `89` | `1` to `100` | Max temperature before clamping (display firmware: 90+ alarm, 120+ "h1" error) |
+
+### Custom config path
+
+Set the `WALRUS_LCD_CONFIG` environment variable to use a different file. Useful for testing or multi-user setups:
+
+```bash
+WALRUS_LCD_CONFIG=/etc/walrus-lcd.toml python3 walrus_lcd.py
+```
+
+When unset, config search order:
+1. `${WALRUS_LCD_CONFIG}` env var (if set)
+2. `~/.local/share/walrus-lcd/config.toml` (installed location)
+3. `<script_dir>/config.toml` (dev mode)
+4. Built-in defaults (no error if no file exists)
+
+> **Note:** The `walrus-config` symlink is installed at `~/.local/bin/walrus-config`. If `~/.local/bin` is not in your `$PATH`, `make config` will still work, or add it manually (your install script will print a warning if this is needed).
 
 ---
 
@@ -163,6 +256,7 @@ lsusb | grep 5131
 |--------|-------------|
 | `make install` | Install driver, udev rule, and systemd service |
 | `make uninstall` | Remove driver and all configuration |
+| `make config` | Interactive configuration tool (temperature source, refresh, etc.) |
 | `make status` | Show service status |
 | `make logs` | Follow service logs (Ctrl-C to exit) |
 | `make restart` | Restart the service |

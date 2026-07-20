@@ -1,0 +1,19 @@
+# Walrus Assassin 90 LCD driver configuration
+# Place at ~/.local/share/walrus-lcd/config.toml or beside the driver
+
+# Temperature source to display
+#   "cpu"  — show CPU temperature only
+#   "gpu"  — show GPU temperature only (requires NVIDIA + pynvml)
+#   "auto" — alternate between CPU and GPU every switch_seconds
+temp_source = "auto"
+
+# Seconds between CPU<->GPU alternation (only used when temp_source = "auto")
+switch_seconds = 6
+
+# HID refresh interval in milliseconds (50ms minimum to avoid bus spam)
+refresh_ms = 200
+
+# Maximum temperature to send to display
+# Display valid range is 0-89; 90+ blinks (alarm), 120+ shows "h1"
+# Lower this if you want to cap the displayed temperature
+clamp_max = 89

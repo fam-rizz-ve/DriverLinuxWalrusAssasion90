@@ -1,4 +1,4 @@
-.PHONY: install uninstall status logs restart stop test clean help
+.PHONY: install uninstall config status logs restart stop test clean help
 
 help:
 	@echo "Walrus Assassin 90 LCD Driver"
@@ -6,6 +6,7 @@ help:
 	@echo "Targets:"
 	@echo "  make install    - Install driver, udev rule, and systemd service"
 	@echo "  make uninstall  - Remove driver and all configuration"
+	@echo "  make config     - Interactive configuration (temperature source, refresh, etc.)"
 	@echo "  make status     - Show service status"
 	@echo "  make logs       - Follow service logs (Ctrl-C to exit)"
 	@echo "  make restart    - Restart the service"
@@ -18,6 +19,10 @@ install:
 
 uninstall:
 	@bash uninstall.sh
+
+config:
+	@command -v walrus-config >/dev/null 2>&1 && walrus-config || \
+	 python3 src/config_walrus.py
 
 status:
 	@systemctl --user status cooler-lcd.service
